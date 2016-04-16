@@ -1,50 +1,6 @@
 (function(){
 ///<reference path="../typings/angularjs/angular.d.ts"/>
-/*
- * decorates $compileProvider so that we have access to routing metadata
- */
-function compilerProviderDecorator($compileProvider, $$directiveIntrospectorProvider) {
-    var directive = $compileProvider.directive;
-    $compileProvider.directive = function (name, factory) {
-        $$directiveIntrospectorProvider.register(name, factory);
-        return directive.apply(this, arguments);
-    };
-}
-/*
- * private service that holds route mappings for each controller
- */
-var DirectiveIntrospectorProvider = (function () {
-    function DirectiveIntrospectorProvider() {
-        this.directiveBuffer = [];
-        this.directiveFactoriesByName = {};
-        this.onDirectiveRegistered = null;
-    }
-    DirectiveIntrospectorProvider.prototype.register = function (name, factory) {
-        if (angular.isArray(factory)) {
-            factory = factory[factory.length - 1];
-        }
-        this.directiveFactoriesByName[name] = factory;
-        if (this.onDirectiveRegistered) {
-            this.onDirectiveRegistered(name, factory);
-        }
-        else {
-            this.directiveBuffer.push({ name: name, factory: factory });
-        }
-    };
-    DirectiveIntrospectorProvider.prototype.$get = function () {
-        var _this = this;
-        var fn = function (newOnControllerRegistered) {
-            _this.onDirectiveRegistered = newOnControllerRegistered;
-            while (_this.directiveBuffer.length > 0) {
-                var directive = _this.directiveBuffer.pop();
-                _this.onDirectiveRegistered(directive.name, directive.factory);
-            }
-        };
-        fn.getTypeByName = function (name) { return _this.directiveFactoriesByName[name]; };
-        return fn;
-    };
-    return DirectiveIntrospectorProvider;
-})();
+"use strict";
 /**
  * @name ngOutlet
  *
@@ -72,7 +28,7 @@ function ngOutletDirective($animate, $q, $rootRouter) {
             function class_1() {
             }
             return class_1;
-        })(),
+        }()),
         controllerAs: '$$ngOutlet'
     };
     function outletLink(scope, element, attrs, ctrls, $transclude) {
@@ -157,7 +113,7 @@ function ngOutletDirective($animate, $q, $rootRouter) {
                 return this.deferredActivation.promise;
             };
             return Outlet;
-        })();
+        }());
         var parentCtrl = ctrls[0], myCtrl = ctrls[1], router = (parentCtrl && parentCtrl.$$router) || rootRouter;
         myCtrl.$$currentComponent = null;
         router.registerPrimaryOutlet(new Outlet(myCtrl, router));
@@ -225,11 +181,20 @@ function ngLinkDirective($rootRouter, $parse) {
         if (!router) {
             return;
         }
-        var instruction = null;
+        var navigationInstruction = null;
         var link = attrs.ngLink || '';
         function getLink(params) {
-            instruction = router.generate(params);
-            return './' + angular.stringifyInstruction(instruction);
+            navigationInstruction = router.generate(params);
+            scope.$watch(function () { return router.isRouteActive(navigationInstruction); }, function (active) {
+                if (active) {
+                    element.addClass('ng-link-active');
+                }
+                else {
+                    element.removeClass('ng-link-active');
+                }
+            });
+            var navigationHref = navigationInstruction.toLinkUrl();
+            return $rootRouter._location.prepareExternalUrl(navigationHref);
         }
         var routeParamsGetter = $parse(link);
         // we can avoid adding a watcher if it's a literal
@@ -241,10 +206,10 @@ function ngLinkDirective($rootRouter, $parse) {
             scope.$watch(function () { return routeParamsGetter(scope); }, function (params) { return element.attr('href', getLink(params)); }, true);
         }
         element.on('click', function (event) {
-            if (event.which !== 1 || !instruction) {
+            if (event.which !== 1 || !navigationInstruction) {
                 return;
             }
-            $rootRouter.navigateByInstruction(instruction);
+            $rootRouter.navigateByInstruction(navigationInstruction);
             event.preventDefault();
         });
     }
@@ -260,21 +225,39 @@ angular.module('ngComponentRouter', [])
     .directive('ngOutlet', ['$compile', ngOutletFillContentDirective])
     .directive('ngLink', ['$rootRouter', '$parse', ngLinkDirective])
     .directive('$router', ['$q', routerTriggerDirective]);
-/*
- * A module for inspecting controller constructors
- */
-angular.module('ng')
-    .provider('$$directiveIntrospector', DirectiveIntrospectorProvider)
-    .config(['$compileProvider', '$$directiveIntrospectorProvider', compilerProviderDecorator]);
 
 angular.module('ngComponentRouter').
     value('$route', null). // can be overloaded with ngRouteShim
     // Because Angular 1 has no notion of a root component, we use an object with unique identity
     // to represent this. Can be overloaded with a component name
     value('$routerRootComponent', new Object()).
-    factory('$rootRouter', ['$q', '$location', '$$directiveIntrospector', '$browser', '$rootScope', '$injector', '$routerRootComponent', routerFactory]);
 
-function routerFactory($q, $location, $$directiveIntrospector, $browser, $rootScope, $injector, $routerRootComponent) {
+    // Unfortunately, $location doesn't expose what the current hashPrefix is
+    // So we have to monkey patch the $locationProvider to capture this value
+    provider('$locationHashPrefix', ['$locationProvider', $locationHashPrefixProvider]).
+    factory('$rootRouter', ['$q', '$location', '$browser', '$rootScope', '$injector', '$routerRootComponent', '$locationHashPrefix', routerFactory]);
+
+function $locationHashPrefixProvider($locationProvider) {
+
+  // Get hold of the original hashPrefix method
+  var hashPrefixFn = $locationProvider.hashPrefix.bind($locationProvider);
+
+  // Read the current hashPrefix (in case it was set before this monkey-patch occurred)
+  var hashPrefix = hashPrefixFn();
+
+  // Override the helper so that we can read any changes to the prefix (after this monkey-patch)
+  $locationProvider.hashPrefix = function(prefix) {
+    if (angular.isDefined(prefix)) {
+      hashPrefix = prefix;
+    }
+    return hashPrefixFn(prefix);
+  }
+
+  // Return the final hashPrefix as the value of this service
+  this.$get = function() { return hashPrefix; };
+}
+
+function routerFactory($q, $location, $browser, $rootScope, $injector, $routerRootComponent, $locationHashPrefix) {
 
   // When this file is processed, the line below is replaced with
   // the contents of `../lib/facades.es5`.
@@ -596,6 +579,12 @@ Location.prototype.path = function () {
 Location.prototype.go = function (path, query) {
   return $location.url(path + query);
 };
+Location.prototype.prepareExternalUrl = function(url) {
+  if (url.length > 0 && !url.startsWith('/')) {
+    url = '/' + url;
+  }
+  return $location.$$html5 ? '.' + url : '#' + $locationHashPrefix + url;
+};
 
 
   var exports = {
@@ -603,11 +592,12 @@ Location.prototype.go = function (path, query) {
     OpaqueToken: function () {},
     Inject: function () {}
   };
-  var require = function () {return exports;};
+  var routerRequire = function () {return exports;};
 
   // When this file is processed, the line below is replaced with
   // the contents of the compiled TypeScript classes.
-  var TouchMap = (function () {
+  "use strict";
+var TouchMap = (function () {
     function TouchMap(map) {
         var _this = this;
         this.map = {};
@@ -631,7 +621,7 @@ Location.prototype.go = function (path, query) {
         return unused;
     };
     return TouchMap;
-})();
+}());
 exports.TouchMap = TouchMap;
 function normalizeString(obj) {
     if (isBlank(obj)) {
@@ -642,6 +632,7 @@ function normalizeString(obj) {
     }
 }
 exports.normalizeString = normalizeString;
+"use strict";
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
     function __() { this.constructor = d; }
@@ -695,7 +686,7 @@ var Url = (function () {
     /** @internal */
     Url.prototype._childString = function () { return isPresent(this.child) ? ('/' + this.child.toString()) : ''; };
     return Url;
-})();
+}());
 exports.Url = Url;
 var RootUrl = (function (_super) {
     __extends(RootUrl, _super);
@@ -716,7 +707,7 @@ var RootUrl = (function (_super) {
         return '?' + serializeParams(this.params);
     };
     return RootUrl;
-})(Url);
+}(Url));
 exports.RootUrl = RootUrl;
 function pathSegmentsToUrl(pathSegments) {
     var url = new Url(pathSegments[pathSegments.length - 1]);
@@ -729,6 +720,11 @@ exports.pathSegmentsToUrl = pathSegmentsToUrl;
 var SEGMENT_RE = RegExpWrapper.create('^[^\\/\\(\\)\\?;=&#]+');
 function matchUrlSegment(str) {
     var match = RegExpWrapper.firstMatch(SEGMENT_RE, str);
+    return isPresent(match) ? match[0] : '';
+}
+var QUERY_PARAM_VALUE_RE = RegExpWrapper.create('^[^\\(\\)\\?;&#]+');
+function matchUrlQueryParamValue(str) {
+    var match = RegExpWrapper.firstMatch(QUERY_PARAM_VALUE_RE, str);
     return isPresent(match) ? match[0] : '';
 }
 var UrlParser = (function () {
@@ -802,10 +798,10 @@ var UrlParser = (function () {
     UrlParser.prototype.parseQueryParams = function () {
         var params = {};
         this.capture('?');
-        this.parseParam(params);
+        this.parseQueryParam(params);
         while (this._remaining.length > 0 && this.peekStartsWith('&')) {
             this.capture('&');
-            this.parseParam(params);
+            this.parseQueryParam(params);
         }
         return params;
     };
@@ -834,6 +830,23 @@ var UrlParser = (function () {
         }
         params[key] = value;
     };
+    UrlParser.prototype.parseQueryParam = function (params) {
+        var key = matchUrlSegment(this._remaining);
+        if (isBlank(key)) {
+            return;
+        }
+        this.capture(key);
+        var value = true;
+        if (this.peekStartsWith('=')) {
+            this.capture('=');
+            var valueMatch = matchUrlQueryParamValue(this._remaining);
+            if (isPresent(valueMatch)) {
+                value = valueMatch;
+                this.capture(value);
+            }
+        }
+        params[key] = value;
+    };
     UrlParser.prototype.parseAuxiliaryRoutes = function () {
         var routes = [];
         this.capture('(');
@@ -847,9 +860,10 @@ var UrlParser = (function () {
         return routes;
     };
     return UrlParser;
-})();
+}());
 exports.UrlParser = UrlParser;
 exports.parser = new UrlParser();
+"use strict";
 var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
     var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
     if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
@@ -864,7 +878,7 @@ var RouteLifecycleHook = (function () {
         CONST()
     ], RouteLifecycleHook);
     return RouteLifecycleHook;
-})();
+}());
 exports.RouteLifecycleHook = RouteLifecycleHook;
 var CanActivate = (function () {
     function CanActivate(fn) {
@@ -874,14 +888,15 @@ var CanActivate = (function () {
         CONST()
     ], CanActivate);
     return CanActivate;
-})();
+}());
 exports.CanActivate = CanActivate;
 exports.routerCanReuse = CONST_EXPR(new RouteLifecycleHook("routerCanReuse"));
 exports.routerCanDeactivate = CONST_EXPR(new RouteLifecycleHook("routerCanDeactivate"));
 exports.routerOnActivate = CONST_EXPR(new RouteLifecycleHook("routerOnActivate"));
 exports.routerOnReuse = CONST_EXPR(new RouteLifecycleHook("routerOnReuse"));
 exports.routerOnDeactivate = CONST_EXPR(new RouteLifecycleHook("routerOnDeactivate"));
-var lifecycle_annotations_impl_1 = require('./lifecycle_annotations_impl');
+"use strict";
+var lifecycle_annotations_impl_1 = routerRequire('./lifecycle_annotations_impl');
 function hasLifecycleHook(e, type) {
     if (!(type instanceof Type))
         return false;
@@ -899,6 +914,7 @@ function getCanActivateHook(type) {
     return null;
 }
 exports.getCanActivateHook = getCanActivateHook;
+"use strict";
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
     function __() { this.constructor = d; }
@@ -910,8 +926,9 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-var route_definition_1 = require('../route_definition');
+var route_definition_1 = routerRequire('../route_definition');
 exports.RouteDefinition = route_definition_1.RouteDefinition;
+var __make_dart_analyzer_happy = null;
 /**
  * The `RouteConfig` decorator defines routes for a given component.
  *
@@ -925,7 +942,7 @@ var RouteConfig = (function () {
         CONST()
     ], RouteConfig);
     return RouteConfig;
-})();
+}());
 exports.RouteConfig = RouteConfig;
 var AbstractRoute = (function () {
     function AbstractRoute(_a) {
@@ -941,7 +958,7 @@ var AbstractRoute = (function () {
         CONST()
     ], AbstractRoute);
     return AbstractRoute;
-})();
+}());
 exports.AbstractRoute = AbstractRoute;
 /**
  * `Route` is a type of {@link RouteDefinition} used to route a path to a component.
@@ -984,7 +1001,7 @@ var Route = (function (_super) {
         CONST()
     ], Route);
     return Route;
-})(AbstractRoute);
+}(AbstractRoute));
 exports.Route = Route;
 /**
  * `AuxRoute` is a type of {@link RouteDefinition} used to define an auxiliary route.
@@ -1024,7 +1041,7 @@ var AuxRoute = (function (_super) {
         CONST()
     ], AuxRoute);
     return AuxRoute;
-})(AbstractRoute);
+}(AbstractRoute));
 exports.AuxRoute = AuxRoute;
 /**
  * `AsyncRoute` is a type of {@link RouteDefinition} used to route a path to an asynchronously
@@ -1069,7 +1086,7 @@ var AsyncRoute = (function (_super) {
         CONST()
     ], AsyncRoute);
     return AsyncRoute;
-})(AbstractRoute);
+}(AbstractRoute));
 exports.AsyncRoute = AsyncRoute;
 /**
  * `Redirect` is a type of {@link RouteDefinition} used to route a path to a canonical route.
@@ -1110,9 +1127,10 @@ var Redirect = (function (_super) {
         CONST()
     ], Redirect);
     return Redirect;
-})(AbstractRoute);
+}(AbstractRoute));
 exports.Redirect = Redirect;
-var route_config_decorator_1 = require('./route_config_decorator');
+"use strict";
+var route_config_decorator_1 = routerRequire('./route_config_decorator');
 /**
  * Given a JS Object that represents a route config, returns a corresponding Route, AsyncRoute,
  * AuxRoute or Redirect object.
@@ -1203,7 +1221,8 @@ function assertComponentExists(component, path) {
     }
 }
 exports.assertComponentExists = assertComponentExists;
-var instruction_1 = require('../../instruction');
+"use strict";
+var instruction_1 = routerRequire('../../instruction');
 var AsyncRouteHandler = (function () {
     function AsyncRouteHandler(_loader, data) {
         if (data === void 0) { data = null; }
@@ -1223,9 +1242,10 @@ var AsyncRouteHandler = (function () {
         });
     };
     return AsyncRouteHandler;
-})();
+}());
 exports.AsyncRouteHandler = AsyncRouteHandler;
-var instruction_1 = require('../../instruction');
+"use strict";
+var instruction_1 = routerRequire('../../instruction');
 var SyncRouteHandler = (function () {
     function SyncRouteHandler(componentType, data) {
         this.componentType = componentType;
@@ -1236,21 +1256,22 @@ var SyncRouteHandler = (function () {
     }
     SyncRouteHandler.prototype.resolveComponentType = function () { return this._resolvedComponent; };
     return SyncRouteHandler;
-})();
+}());
 exports.SyncRouteHandler = SyncRouteHandler;
+"use strict";
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
     function __() { this.constructor = d; }
     d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
 };
-var url_parser_1 = require('../url_parser');
-var instruction_1 = require('../instruction');
+var url_parser_1 = routerRequire('../url_parser');
+var instruction_1 = routerRequire('../instruction');
 // RouteMatch objects hold information about a match between a rule and a URL
 var RouteMatch = (function () {
     function RouteMatch() {
     }
     return RouteMatch;
-})();
+}());
 exports.RouteMatch = RouteMatch;
 var PathMatch = (function (_super) {
     __extends(PathMatch, _super);
@@ -1261,7 +1282,7 @@ var PathMatch = (function (_super) {
         this.remainingAux = remainingAux;
     }
     return PathMatch;
-})(RouteMatch);
+}(RouteMatch));
 exports.PathMatch = PathMatch;
 var RedirectMatch = (function (_super) {
     __extends(RedirectMatch, _super);
@@ -1271,7 +1292,7 @@ var RedirectMatch = (function (_super) {
         this.specificity = specificity;
     }
     return RedirectMatch;
-})(RouteMatch);
+}(RouteMatch));
 exports.RedirectMatch = RedirectMatch;
 var RedirectRule = (function () {
     function RedirectRule(_pathRecognizer, redirectTo) {
@@ -1299,14 +1320,15 @@ var RedirectRule = (function () {
         throw new BaseException("Tried to generate a redirect.");
     };
     return RedirectRule;
-})();
+}());
 exports.RedirectRule = RedirectRule;
 // represents something like '/foo/:bar'
 var RouteRule = (function () {
     // TODO: cache component instruction instances by params and by ParsedUrl instance
-    function RouteRule(_routePath, handler) {
+    function RouteRule(_routePath, handler, _routeName) {
         this._routePath = _routePath;
         this.handler = handler;
+        this._routeName = _routeName;
         this._cache = new Map();
         this.specificity = this._routePath.specificity;
         this.hash = this._routePath.hash;
@@ -1346,19 +1368,20 @@ var RouteRule = (function () {
         if (this._cache.has(hashKey)) {
             return this._cache.get(hashKey);
         }
-        var instruction = new instruction_1.ComponentInstruction(urlPath, urlParams, this.handler.data, this.handler.componentType, this.terminal, this.specificity, params);
+        var instruction = new instruction_1.ComponentInstruction(urlPath, urlParams, this.handler.data, this.handler.componentType, this.terminal, this.specificity, params, this._routeName);
         this._cache.set(hashKey, instruction);
         return instruction;
     };
     return RouteRule;
-})();
+}());
 exports.RouteRule = RouteRule;
-var rules_1 = require('./rules');
-var route_config_impl_1 = require('../route_config/route_config_impl');
-var async_route_handler_1 = require('./route_handlers/async_route_handler');
-var sync_route_handler_1 = require('./route_handlers/sync_route_handler');
-var param_route_path_1 = require('./route_paths/param_route_path');
-var regex_route_path_1 = require('./route_paths/regex_route_path');
+"use strict";
+var rules_1 = routerRequire('./rules');
+var route_config_impl_1 = routerRequire('../route_config/route_config_impl');
+var async_route_handler_1 = routerRequire('./route_handlers/async_route_handler');
+var sync_route_handler_1 = routerRequire('./route_handlers/sync_route_handler');
+var param_route_path_1 = routerRequire('./route_paths/param_route_path');
+var regex_route_path_1 = routerRequire('./route_paths/regex_route_path');
 /**
  * A `RuleSet` is responsible for recognizing routes for a particular component.
  * It is consumed by `RouteRegistry`, which knows how to recognize an entire hierarchy of
@@ -1389,7 +1412,7 @@ var RuleSet = (function () {
         if (config instanceof route_config_impl_1.AuxRoute) {
             handler = new sync_route_handler_1.SyncRouteHandler(config.component, config.data);
             var routePath_1 = this._getRoutePath(config);
-            var auxRule = new rules_1.RouteRule(routePath_1, handler);
+            var auxRule = new rules_1.RouteRule(routePath_1, handler, config.name);
             this.auxRulesByPath.set(routePath_1.toString(), auxRule);
             if (isPresent(config.name)) {
                 this.auxRulesByName.set(config.name, auxRule);
@@ -1413,7 +1436,7 @@ var RuleSet = (function () {
             useAsDefault = isPresent(config.useAsDefault) && config.useAsDefault;
         }
         var routePath = this._getRoutePath(config);
-        var newRule = new rules_1.RouteRule(routePath, handler);
+        var newRule = new rules_1.RouteRule(routePath, handler, config.name);
         this._assertNoHashCollision(newRule.hash, config.path);
         if (useAsDefault) {
             if (isPresent(this.defaultRule)) {
@@ -1498,8 +1521,9 @@ var RuleSet = (function () {
         throw new BaseException('Route must provide either a path or regex property');
     };
     return RuleSet;
-})();
+}());
 exports.RuleSet = RuleSet;
+"use strict";
 var MatchedUrl = (function () {
     function MatchedUrl(urlPath, urlParams, allParams, auxiliary, rest) {
         this.urlPath = urlPath;
@@ -1509,7 +1533,7 @@ var MatchedUrl = (function () {
         this.rest = rest;
     }
     return MatchedUrl;
-})();
+}());
 exports.MatchedUrl = MatchedUrl;
 var GeneratedUrl = (function () {
     function GeneratedUrl(urlPath, urlParams) {
@@ -1517,11 +1541,12 @@ var GeneratedUrl = (function () {
         this.urlParams = urlParams;
     }
     return GeneratedUrl;
-})();
+}());
 exports.GeneratedUrl = GeneratedUrl;
-var utils_1 = require('../../utils');
-var url_parser_1 = require('../../url_parser');
-var route_path_1 = require('./route_path');
+"use strict";
+var utils_1 = routerRequire('../../utils');
+var url_parser_1 = routerRequire('../../url_parser');
+var route_path_1 = routerRequire('./route_path');
 /**
  * Identified by a `...` URL segment. This indicates that the
  * Route will continue to be matched by child `Router`s.
@@ -1535,7 +1560,7 @@ var ContinuationPathSegment = (function () {
     ContinuationPathSegment.prototype.generate = function (params) { return ''; };
     ContinuationPathSegment.prototype.match = function (path) { return true; };
     return ContinuationPathSegment;
-})();
+}());
 /**
  * Identified by a string not starting with a `:` or `*`.
  * Only matches the URL segments that equal the segment path
@@ -1550,7 +1575,7 @@ var StaticPathSegment = (function () {
     StaticPathSegment.prototype.match = function (path) { return path == this.path; };
     StaticPathSegment.prototype.generate = function (params) { return this.path; };
     return StaticPathSegment;
-})();
+}());
 /**
  * Identified by a string starting with `:`. Indicates a segment
  * that can contain a value that will be extracted and provided to
@@ -1567,11 +1592,11 @@ var DynamicPathSegment = (function () {
         if (!StringMapWrapper.contains(params.map, this.name)) {
             throw new BaseException("Route generator for '" + this.name + "' was not included in parameters passed.");
         }
-        return utils_1.normalizeString(params.get(this.name));
+        return encodeDynamicSegment(utils_1.normalizeString(params.get(this.name)));
     };
     DynamicPathSegment.paramMatcher = /^:([^\/]+)$/g;
     return DynamicPathSegment;
-})();
+}());
 /**
  * Identified by a string starting with `*` Indicates that all the following
  * segments match this route and that the value of these segments should
@@ -1587,7 +1612,7 @@ var StarPathSegment = (function () {
     StarPathSegment.prototype.generate = function (params) { return utils_1.normalizeString(params.get(this.name)); };
     StarPathSegment.wildcardMatcher = /^\*([^\/]+)$/g;
     return StarPathSegment;
-})();
+}());
 /**
  * Parses a URL string using a given matcher DSL, and generates URLs from param maps
  */
@@ -1626,7 +1651,7 @@ var ParamRoutePath = (function () {
                 }
                 captured.push(currentUrlSegment.path);
                 if (pathSegment instanceof DynamicPathSegment) {
-                    positionalParams[pathSegment.name] = currentUrlSegment.path;
+                    positionalParams[pathSegment.name] = decodeDynamicSegment(currentUrlSegment.path);
                 }
                 else if (!pathSegment.match(currentUrlSegment.path)) {
                     return null;
@@ -1747,9 +1772,42 @@ var ParamRoutePath = (function () {
     };
     ParamRoutePath.RESERVED_CHARS = RegExpWrapper.create('//|\\(|\\)|;|\\?|=');
     return ParamRoutePath;
-})();
+}());
 exports.ParamRoutePath = ParamRoutePath;
-var route_path_1 = require('./route_path');
+var REGEXP_PERCENT = /%/g;
+var REGEXP_SLASH = /\//g;
+var REGEXP_OPEN_PARENT = /\(/g;
+var REGEXP_CLOSE_PARENT = /\)/g;
+var REGEXP_SEMICOLON = /;/g;
+function encodeDynamicSegment(value) {
+    if (isBlank(value)) {
+        return null;
+    }
+    value = StringWrapper.replaceAll(value, REGEXP_PERCENT, '%25');
+    value = StringWrapper.replaceAll(value, REGEXP_SLASH, '%2F');
+    value = StringWrapper.replaceAll(value, REGEXP_OPEN_PARENT, '%28');
+    value = StringWrapper.replaceAll(value, REGEXP_CLOSE_PARENT, '%29');
+    value = StringWrapper.replaceAll(value, REGEXP_SEMICOLON, '%3B');
+    return value;
+}
+var REGEXP_ENC_SEMICOLON = /%3B/ig;
+var REGEXP_ENC_CLOSE_PARENT = /%29/ig;
+var REGEXP_ENC_OPEN_PARENT = /%28/ig;
+var REGEXP_ENC_SLASH = /%2F/ig;
+var REGEXP_ENC_PERCENT = /%25/ig;
+function decodeDynamicSegment(value) {
+    if (isBlank(value)) {
+        return null;
+    }
+    value = StringWrapper.replaceAll(value, REGEXP_ENC_SEMICOLON, ';');
+    value = StringWrapper.replaceAll(value, REGEXP_ENC_CLOSE_PARENT, ')');
+    value = StringWrapper.replaceAll(value, REGEXP_ENC_OPEN_PARENT, '(');
+    value = StringWrapper.replaceAll(value, REGEXP_ENC_SLASH, '/');
+    value = StringWrapper.replaceAll(value, REGEXP_ENC_PERCENT, '%');
+    return value;
+}
+"use strict";
+var route_path_1 = routerRequire('./route_path');
 var RegexRoutePath = (function () {
     function RegexRoutePath(_reString, _serializer) {
         this._reString = _reString;
@@ -1775,8 +1833,9 @@ var RegexRoutePath = (function () {
     RegexRoutePath.prototype.generateUrl = function (params) { return this._serializer(params); };
     RegexRoutePath.prototype.toString = function () { return this._reString; };
     return RegexRoutePath;
-})();
+}());
 exports.RegexRoutePath = RegexRoutePath;
+"use strict";
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
     function __() { this.constructor = d; }
@@ -1819,7 +1878,7 @@ var RouteParams = (function () {
     }
     RouteParams.prototype.get = function (param) { return normalizeBlank(StringMapWrapper.get(this.params, param)); };
     return RouteParams;
-})();
+}());
 exports.RouteParams = RouteParams;
 /**
  * `RouteData` is an immutable map of additional data you can configure in your {@link Route}.
@@ -1840,8 +1899,10 @@ exports.RouteParams = RouteParams;
  * ])
  * class AppCmp {}
  *
- * @Component({...})
- * @View({ template: 'user: {{isAdmin}}' })
+ * @Component({
+ *   ...,
+ *   template: 'user: {{isAdmin}}'
+ * })
  * class UserCmp {
  *   string: isAdmin;
  *   constructor(data: RouteData) {
@@ -1859,7 +1920,7 @@ var RouteData = (function () {
     }
     RouteData.prototype.get = function (key) { return normalizeBlank(StringMapWrapper.get(this.data, key)); };
     return RouteData;
-})();
+}());
 exports.RouteData = RouteData;
 exports.BLANK_ROUTE_DATA = new RouteData();
 /**
@@ -1947,7 +2008,7 @@ var Instruction = (function () {
     // default instructions override these
     Instruction.prototype.toLinkUrl = function () {
         return this.urlPath + this._stringifyAux() +
-            (isPresent(this.child) ? this.child._toLinkUrl() : '');
+            (isPresent(this.child) ? this.child._toLinkUrl() : '') + this.toUrlQuery();
     };
     // this is the non-root version (called recursively)
     /** @internal */
@@ -1986,7 +2047,7 @@ var Instruction = (function () {
         return '';
     };
     return Instruction;
-})();
+}());
 exports.Instruction = Instruction;
 /**
  * a resolved instruction has an outlet instruction for itself, but maybe not for...
@@ -2000,7 +2061,7 @@ var ResolvedInstruction = (function (_super) {
         return PromiseWrapper.resolve(this.component);
     };
     return ResolvedInstruction;
-})(Instruction);
+}(Instruction));
 exports.ResolvedInstruction = ResolvedInstruction;
 /**
  * Represents a resolved default route
@@ -2014,7 +2075,7 @@ var DefaultInstruction = (function (_super) {
     /** @internal */
     DefaultInstruction.prototype._toLinkUrl = function () { return ''; };
     return DefaultInstruction;
-})(ResolvedInstruction);
+}(ResolvedInstruction));
 exports.DefaultInstruction = DefaultInstruction;
 /**
  * Represents a component that may need to do some redirection or lazy loading at a later time.
@@ -2060,13 +2121,13 @@ var UnresolvedInstruction = (function (_super) {
         if (isPresent(this.component)) {
             return PromiseWrapper.resolve(this.component);
         }
-        return this._resolver().then(function (resolution) {
-            _this.child = resolution.child;
-            return _this.component = resolution.component;
+        return this._resolver().then(function (instruction) {
+            _this.child = isPresent(instruction) ? instruction.child : null;
+            return _this.component = isPresent(instruction) ? instruction.component : null;
         });
     };
     return UnresolvedInstruction;
-})(Instruction);
+}(Instruction));
 exports.UnresolvedInstruction = UnresolvedInstruction;
 var RedirectInstruction = (function (_super) {
     __extends(RedirectInstruction, _super);
@@ -2080,7 +2141,7 @@ var RedirectInstruction = (function (_super) {
         configurable: true
     });
     return RedirectInstruction;
-})(ResolvedInstruction);
+}(ResolvedInstruction));
 exports.RedirectInstruction = RedirectInstruction;
 /**
  * A `ComponentInstruction` represents the route state for a single component.
@@ -2098,7 +2159,7 @@ var ComponentInstruction = (function () {
     /**
      * @internal
      */
-    function ComponentInstruction(urlPath, urlParams, data, componentType, terminal, specificity, params) {
+    function ComponentInstruction(urlPath, urlParams, data, componentType, terminal, specificity, params, routeName) {
         if (params === void 0) { params = null; }
         this.urlPath = urlPath;
         this.urlParams = urlParams;
@@ -2106,19 +2167,21 @@ var ComponentInstruction = (function () {
         this.terminal = terminal;
         this.specificity = specificity;
         this.params = params;
+        this.routeName = routeName;
         this.reuse = false;
         this.routeData = isPresent(data) ? data : exports.BLANK_ROUTE_DATA;
     }
     return ComponentInstruction;
-})();
+}());
 exports.ComponentInstruction = ComponentInstruction;
-var core_1 = require('angular2/core');
-var route_config_impl_1 = require('./route_config/route_config_impl');
-var rules_1 = require('./rules/rules');
-var rule_set_1 = require('./rules/rule_set');
-var instruction_1 = require('./instruction');
-var route_config_normalizer_1 = require('./route_config/route_config_normalizer');
-var url_parser_1 = require('./url_parser');
+"use strict";
+var core_1 = routerRequire('angular2/core');
+var route_config_impl_1 = routerRequire('./route_config/route_config_impl');
+var rules_1 = routerRequire('./rules/rules');
+var rule_set_1 = routerRequire('./rules/rule_set');
+var instruction_1 = routerRequire('./instruction');
+var route_config_normalizer_1 = routerRequire('./route_config/route_config_normalizer');
+var url_parser_1 = routerRequire('./url_parser');
 var _resolveToNull = PromiseWrapper.resolve(null);
 // A LinkItemArray is an array, which describes a set of routes
 // The items in the array are found in groups:
@@ -2484,7 +2547,7 @@ var RouteRegistry = (function () {
         });
     };
     return RouteRegistry;
-})();
+}());
 exports.RouteRegistry = RouteRegistry;
 /*
  * Given: ['/a/b', {c: 2}]
@@ -2554,12 +2617,13 @@ function assertTerminalComponent(component, path) {
         }
     }
 }
+"use strict";
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
     function __() { this.constructor = d; }
     d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
 };
-var route_lifecycle_reflector_1 = require('./lifecycle/route_lifecycle_reflector');
+var route_lifecycle_reflector_1 = routerRequire('./lifecycle/route_lifecycle_reflector');
 var _resolveToTrue = PromiseWrapper.resolve(true);
 var _resolveToFalse = PromiseWrapper.resolve(false);
 /**
@@ -2580,12 +2644,16 @@ var _resolveToFalse = PromiseWrapper.resolve(false);
  * The router uses the `RouteRegistry` to get an `Instruction`.
  */
 var Router = (function () {
-    function Router(registry, parent, hostComponent) {
+    function Router(registry, parent, hostComponent, root) {
         this.registry = registry;
         this.parent = parent;
         this.hostComponent = hostComponent;
+        this.root = root;
         this.navigating = false;
-        this._currentInstruction = null;
+        /**
+         * The current `Instruction` for the router
+         */
+        this.currentInstruction = null;
         this._currentNavigation = _resolveToTrue;
         this._outlet = null;
         this._auxRouters = new Map();
@@ -2616,8 +2684,8 @@ var Router = (function () {
             throw new BaseException("Primary outlet is already registered.");
         }
         this._outlet = outlet;
-        if (isPresent(this._currentInstruction)) {
-            return this.commit(this._currentInstruction, false);
+        if (isPresent(this.currentInstruction)) {
+            return this.commit(this.currentInstruction, false);
         }
         return _resolveToTrue;
     };
@@ -2646,8 +2714,8 @@ var Router = (function () {
         this._auxRouters.set(outletName, router);
         router._outlet = outlet;
         var auxInstruction;
-        if (isPresent(this._currentInstruction) &&
-            isPresent(auxInstruction = this._currentInstruction.auxInstruction[outletName])) {
+        if (isPresent(this.currentInstruction) &&
+            isPresent(auxInstruction = this.currentInstruction.auxInstruction[outletName])) {
             return router.commit(auxInstruction);
         }
         return _resolveToTrue;
@@ -2657,13 +2725,29 @@ var Router = (function () {
      * otherwise `false`.
      */
     Router.prototype.isRouteActive = function (instruction) {
+        var _this = this;
         var router = this;
+        if (isBlank(this.currentInstruction)) {
+            return false;
+        }
+        // `instruction` corresponds to the root router
         while (isPresent(router.parent) && isPresent(instruction.child)) {
             router = router.parent;
             instruction = instruction.child;
         }
-        return isPresent(this._currentInstruction) &&
-            this._currentInstruction.component == instruction.component;
+        if (isBlank(instruction.component) || isBlank(this.currentInstruction.component) ||
+            this.currentInstruction.component.routeName != instruction.component.routeName) {
+            return false;
+        }
+        var paramEquals = true;
+        if (isPresent(this.currentInstruction.component.params)) {
+            StringMapWrapper.forEach(instruction.component.params, function (value, key) {
+                if (_this.currentInstruction.component.params[key] !== value) {
+                    paramEquals = false;
+                }
+            });
+        }
+        return paramEquals;
     };
     /**
      * Dynamically update the routing configuration and trigger a navigation.
@@ -2774,6 +2858,8 @@ var Router = (function () {
         });
     };
     Router.prototype._emitNavigationFinish = function (url) { ObservableWrapper.callEmit(this._subject, url); };
+    /** @internal */
+    Router.prototype._emitNavigationFail = function (url) { ObservableWrapper.callError(this._subject, url); };
     Router.prototype._afterPromiseFinishNavigating = function (promise) {
         var _this = this;
         return PromiseWrapper.catchError(promise.then(function (_) { return _this._finishNavigating(); }), function (err) {
@@ -2802,7 +2888,7 @@ var Router = (function () {
         });
     };
     Router.prototype._canActivate = function (nextInstruction) {
-        return canActivateOne(nextInstruction, this._currentInstruction);
+        return canActivateOne(nextInstruction, this.currentInstruction);
     };
     Router.prototype._routerCanDeactivate = function (instruction) {
         var _this = this;
@@ -2830,6 +2916,8 @@ var Router = (function () {
                 return false;
             }
             if (isPresent(_this._childRouter)) {
+                // TODO: ideally, this closure would map to async-await in Dart.
+                // For now, casting to any to suppress an error.
                 return _this._childRouter._routerCanDeactivate(childInstruction);
             }
             return true;
@@ -2841,7 +2929,7 @@ var Router = (function () {
     Router.prototype.commit = function (instruction, _skipLocationChange) {
         var _this = this;
         if (_skipLocationChange === void 0) { _skipLocationChange = false; }
-        this._currentInstruction = instruction;
+        this.currentInstruction = instruction;
         var next = _resolveToTrue;
         if (isPresent(this._outlet) && isPresent(instruction.component)) {
             var componentInstruction = instruction.component;
@@ -2875,8 +2963,8 @@ var Router = (function () {
     /**
      * Subscribe to URL updates from the router
      */
-    Router.prototype.subscribe = function (onNext) {
-        return ObservableWrapper.subscribe(this._subject, onNext);
+    Router.prototype.subscribe = function (onNext, onError) {
+        return ObservableWrapper.subscribe(this._subject, onNext, onError);
     };
     /**
      * Removes the contents of this router's outlet and all descendant outlets
@@ -2907,10 +2995,10 @@ var Router = (function () {
         return this.registry.recognize(url, ancestorComponents);
     };
     Router.prototype._getAncestorInstructions = function () {
-        var ancestorInstructions = [this._currentInstruction];
+        var ancestorInstructions = [this.currentInstruction];
         var ancestorRouter = this;
         while (isPresent(ancestorRouter = ancestorRouter.parent)) {
-            ancestorInstructions.unshift(ancestorRouter._currentInstruction);
+            ancestorInstructions.unshift(ancestorRouter.currentInstruction);
         }
         return ancestorInstructions;
     };
@@ -2932,43 +3020,51 @@ var Router = (function () {
         return this.registry.generate(linkParams, ancestorInstructions);
     };
     return Router;
-})();
+}());
 exports.Router = Router;
 var RootRouter = (function (_super) {
     __extends(RootRouter, _super);
     function RootRouter(registry, location, primaryComponent) {
         var _this = this;
         _super.call(this, registry, null, primaryComponent);
+        this.root = this;
         this._location = location;
         this._locationSub = this._location.subscribe(function (change) {
             // we call recognize ourselves
             _this.recognize(change['url'])
                 .then(function (instruction) {
-                _this.navigateByInstruction(instruction, isPresent(change['pop']))
-                    .then(function (_) {
-                    // this is a popstate event; no need to change the URL
-                    if (isPresent(change['pop']) && change['type'] != 'hashchange') {
-                        return;
-                    }
-                    var emitPath = instruction.toUrlPath();
-                    var emitQuery = instruction.toUrlQuery();
-                    if (emitPath.length > 0 && emitPath[0] != '/') {
-                        emitPath = '/' + emitPath;
-                    }
-                    // Because we've opted to use All hashchange events occur outside Angular.
-                    // However, apps that are migrating might have hash links that operate outside
-                    // angular to which routing must respond.
-                    // To support these cases where we respond to hashchanges and redirect as a
-                    // result, we need to replace the top item on the stack.
-                    if (change['type'] == 'hashchange') {
-                        if (instruction.toRootUrl() != _this._location.path()) {
-                            _this._location.replaceState(emitPath, emitQuery);
+                if (isPresent(instruction)) {
+                    _this.navigateByInstruction(instruction, isPresent(change['pop']))
+                        .then(function (_) {
+                        // this is a popstate event; no need to change the URL
+                        if (isPresent(change['pop']) && change['type'] != 'hashchange') {
+                            return;
                         }
-                    }
-                    else {
-                        _this._location.go(emitPath, emitQuery);
-                    }
-                });
+                        var emitPath = instruction.toUrlPath();
+                        var emitQuery = instruction.toUrlQuery();
+                        if (emitPath.length > 0 && emitPath[0] != '/') {
+                            emitPath = '/' + emitPath;
+                        }
+                        // We've opted to use pushstate and popState APIs regardless of whether you
+                        // an app uses HashLocationStrategy or PathLocationStrategy.
+                        // However, apps that are migrating might have hash links that operate outside
+                        // angular to which routing must respond.
+                        // Therefore we know that all hashchange events occur outside Angular.
+                        // To support these cases where we respond to hashchanges and redirect as a
+                        // result, we need to replace the top item on the stack.
+                        if (change['type'] == 'hashchange') {
+                            if (instruction.toRootUrl() != _this._location.path()) {
+                                _this._location.replaceState(emitPath, emitQuery);
+                            }
+                        }
+                        else {
+                            _this._location.go(emitPath, emitQuery);
+                        }
+                    });
+                }
+                else {
+                    _this._emitNavigationFail(change['url']);
+                }
             });
         });
         this.registry.configFromComponent(primaryComponent);
@@ -2995,12 +3091,12 @@ var RootRouter = (function (_super) {
         }
     };
     return RootRouter;
-})(Router);
+}(Router));
 exports.RootRouter = RootRouter;
 var ChildRouter = (function (_super) {
     __extends(ChildRouter, _super);
     function ChildRouter(parent, hostComponent) {
-        _super.call(this, parent.registry, parent, hostComponent);
+        _super.call(this, parent.registry, parent, hostComponent, parent.root);
         this.parent = parent;
     }
     ChildRouter.prototype.navigateByUrl = function (url, _skipLocationChange) {
@@ -3014,7 +3110,7 @@ var ChildRouter = (function (_super) {
         return this.parent.navigateByInstruction(instruction, _skipLocationChange);
     };
     return ChildRouter;
-})(Router);
+}(Router));
 function canActivateOne(nextInstruction, prevInstruction) {
     var next = _resolveToTrue;
     if (isBlank(nextInstruction.component)) {
@@ -3039,11 +3135,24 @@ function canActivateOne(nextInstruction, prevInstruction) {
 }
 
 
+  function getComponentConstructor(name) {
+    var serviceName = name + 'Directive';
+    if ($injector.has(serviceName)) {
+      var definitions = $injector.get(serviceName);
+      if (definitions.length > 1) {
+        throw new BaseException('too many directives named "' + name + '"');
+      }
+      return definitions[0].controller;
+    } else {
+      throw new BaseException('directive "' + name + '" is not registered');
+    }
+  }
+
   //TODO: this is a hack to replace the exiting implementation at run-time
   exports.getCanActivateHook = function (directiveName) {
-    var factory = $$directiveIntrospector.getTypeByName(directiveName);
-    return factory && factory.$canActivate && function (next, prev) {
-      return $injector.invoke(factory.$canActivate, null, {
+    var controller = getComponentConstructor(directiveName);
+    return controller.$canActivate && function (next, prev) {
+      return $injector.invoke(controller.$canActivate, null, {
         $nextInstruction: next,
         $prevInstruction: prev
       });
@@ -3061,16 +3170,31 @@ function canActivateOne(nextInstruction, prevInstruction) {
   var RouteRegistry = exports.RouteRegistry;
   var RootRouter = exports.RootRouter;
 
+  // Override this method to actually get hold of the child routes
+  RouteRegistry.prototype.configFromComponent = function (component) {
+    var that = this;
+    if (isString(component)) {
+      // Don't read the annotations component a type more than once –
+      // this prevents an infinite loop if a component routes recursively.
+      if (this._rules.has(component)) {
+        return;
+      }
+      var controller = getComponentConstructor(component);
+      if (angular.isArray(controller.$routeConfig)) {
+        controller.$routeConfig.forEach(function (config) {
+          var loader = config.loader;
+          if (isPresent(loader)) {
+            config = angular.extend({}, config, { loader: () => $injector.invoke(loader) });
+          }
+          that.config(component, config);
+        });
+      }
+    }
+
+  }
+
   var registry = new RouteRegistry($routerRootComponent);
   var location = new Location();
-
-  $$directiveIntrospector(function (name, factory) {
-    if (angular.isArray(factory.$routeConfig)) {
-      factory.$routeConfig.forEach(function (config) {
-        registry.config(name, config);
-      });
-    }
-  });
 
   var router = new RootRouter(registry, location, $routerRootComponent);
   $rootScope.$watch(function () { return $location.url(); }, function (path) {
