@@ -2938,7 +2938,11 @@ var Router = (function () {
             }
             else {
                 next =
-                    this.deactivate(instruction).then(function (_) { return _this._outlet.activate(componentInstruction); });
+                    this.deactivate(instruction)
+                        .then(function (_) { return _this._outlet.activate(componentInstruction); })
+                        .catch( function(e) {
+                            console.error( "Router Deactivate");
+                        });
             }
             if (isPresent(instruction.child)) {
                 next = next.then(function (_) {
