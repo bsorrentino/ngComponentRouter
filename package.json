@@ -1,5 +1,5 @@
 {
-  "name": "ngcomponentrouter",
+  "name": "ngComponentRouter-patched",
   "version": "0.2.1",
   "description": "porting angular2 router for angular1.5",
   "main": "index.js",
@@ -8,14 +8,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "http://bsorrentino@factory-docker.au-sdc.com:7990/scm/ue/ngcomponentrouter.git"
+    "url": ""
   },
-  "keywords": [
-    "router",
-    "angular2",
-    "angular1"
-  ],
-  "author": "bsorrentino <bartolomeo.sorrentino@gmail.com> (http://soulsoftware-bsc.blogspot.it/)",
+"keywords": [
+    "ng",
+    "angular",
+    "component",
+    "router"
+  ],  
+  "author": "angular-core-team",
   "license": "MIT",
   "devDependencies": {
     "@angular/router": "^0.2.0"
