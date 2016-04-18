@@ -1,5 +1,5 @@
 {
-  "name": "ngcomponentrouter",
+  "name": "ngComponentRouter-patched",
   "version": "0.2.1",
   "description": "porting angular2 router for angular1.5",
   "main": "index.js",
@@ -15,7 +15,7 @@
     "angular",
     "component",
     "router"
-  ],
+  ],  
   "author": "angular-core-team",
   "license": "MIT",
   "devDependencies": {

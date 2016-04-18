@@ -1,15 +1,11 @@
+
 # ngComponentRouter
 Angular 2 Component Router for Angular 1
 
-This is an extract directly built from Angular 2 source code without modification. Adding this as an npm package, because Angular hasn't released an official version yet. 
-
-## Sample Usage
-Check out https://github.com/duluca/angular1.5-starter for sample usage (or to reproduce any errors or issues)
-
-For more usage scenarios, check out https://github.com/brandonroberts/angularjs-component-router
+This is an extract directly built from Angular 2 source code. Adding this as an npm package, because Angular hasn't released an official version yet. 
 
 ## Based on Angular 2 Commit
-03627aa84d90f7f1d8d62f160997b783fdf9eaa4
+930f58718b3d3cdc335a82dcd67d8eb2f1a16bdf
 
 ## Procedure of Extraction
 As discussed on https://github.com/angular/angular.js/issues/12926.
@@ -21,7 +17,17 @@ As discussed on https://github.com/angular/angular.js/issues/12926.
 - The angular_1_router.js file will be in your angular2/dist folder.
 
 ## Changes applied
-- Replaced unnecessary arrow function on line 3165: config = angular.extend({}, config, { loader: $injector.invoke(loader) });
+
+- Added catch in method ```Router.prototype.commit``` on deactivation. This fixes an issue when there is an ucaught exeception on router activation (```$routerOnActivate```) that disable the navigation
+```javascript
+2940 next =
+2941       this.deactivate(instruction)
+2942            .then(function (_) { return _this._outlet.activate(componentInstruction); })
+2943            .catch( function(e) { // this catch fix the issue
+2944                console.error( "Router Deactivate");
+2945            });
+```
 
 ## Alternatives
-This package is out there solely for convenience. You may directly import the router from Angular's npm package. Read more about on https://github.com/angular/angular.js/issues/12926.
+This package is out there solely for convenience. You may directly import the router from Angular's npm package. 
+Read more about on https://github.com/angular/angular.js/issues/12926.
