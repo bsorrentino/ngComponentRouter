@@ -17,6 +17,7 @@ As discussed on https://github.com/angular/angular.js/issues/12926.
 - The angular_1_router.js file will be in your angular2/dist folder.
 
 ## Changes applied
+
 - Added catch in method ```Router.prototype.commit``` on deactivation. This fixes an issue when there is an ucaught exeception on router activation (```$routerOnActivate```) that disable the navigation
 ```javascript
 2940 next =
