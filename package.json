@@ -8,14 +8,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "http://bsorrentino@factory-docker.au-sdc.com:7990/scm/ue/ngcomponentrouter.git"
+    "url": "https://github.com/bsorrentino/ngComponentRouter.git"
   },
   "keywords": [
-    "router",
-    "angular2",
-    "angular1"
+    "ng",
+    "angular",
+    "component",
+    "router"
   ],
-  "author": "bsorrentino <bartolomeo.sorrentino@gmail.com> (http://soulsoftware-bsc.blogspot.it/)",
+  "author": "angular-core-team",
   "license": "MIT",
   "devDependencies": {
     "@angular/router": "^0.2.0"
