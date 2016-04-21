@@ -1,6 +1,6 @@
 {
   "name": "ngComponentRouter-patched",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "porting angular2 router for angular1.5",
   "main": "dist/angular_1_router.js",
   "scripts": {
