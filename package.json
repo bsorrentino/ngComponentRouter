@@ -1,9 +1,10 @@
 {
   "name": "ngComponentRouter-patched",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "porting angular2 router for angular1.5",
-  "main": "index.js",
+  "main": "dist/angular_1_router.js",
   "scripts": {
+    "build": "babel *.js -d dist",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -15,10 +16,12 @@
     "angular",
     "component",
     "router"
-  ],  
+  ],
   "author": "angular-core-team",
   "license": "MIT",
   "devDependencies": {
-    "@angular/router": "^0.2.0"
+    "@angular/router": "^0.2.0",
+    "babel-cli": "^6.7.7",
+    "babel-preset-es2015": "^6.6.0"
   }
 }
